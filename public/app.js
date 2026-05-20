@@ -104,14 +104,15 @@ async function loadStations() {
     // Load stations
     const stations = await supabaseFetch('stations?select=*&order=id');
 
-    // Load latest status report for each station
+    // Load ALL reports ordered by newest first
     const reports = await supabaseFetch('status_reports?select=*&order=created_at.desc');
 
     // Load operators
     const operators = await supabaseFetch('operators?select=*');
 
-    // Merge data
+    // Merge — pick only the FIRST (newest) report for each station
     allStations = stations.map(s => {
+      // Find the most recent report for this station
       const latestReport = reports.find(r => r.station_id === s.id) || {};
       const operator     = operators.find(o => o.station_id === s.id) || {};
       return { ...s, latestReport, operator };
@@ -124,7 +125,8 @@ async function loadStations() {
 
   } catch (err) {
     console.error('Load error:', err);
-    document.getElementById('last-updated').textContent = 'Error loading data';
+    document.getElementById('last-updated').textContent = 'Error — check console';
+    alert('Could not load station data: ' + err.message);
   }
 }
 
@@ -354,14 +356,16 @@ async function submitUpdate() {
     const notes       = document.getElementById('modal-notes').value;
     const photo_url   = document.getElementById('modal-photo').value;
 
-    // Update station status
-    await supabaseFetch(`stations?id=eq.${activeStationId}`, {
+    // Step 1: Update station status
+    const stationRes = await supabaseFetch(`stations?id=eq.${activeStationId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status })
+      body: JSON.stringify({ status }),
+      headers: { 'Prefer': 'return=representation' }
     });
+    console.log('Station update result:', stationRes);
 
-    // Insert new status report
-    await supabaseFetch('status_reports', {
+    // Step 2: Insert new status report
+    const reportRes = await supabaseFetch('status_reports', {
       method: 'POST',
       body: JSON.stringify({
         station_id:       activeStationId,
@@ -372,18 +376,29 @@ async function submitUpdate() {
         photo_url,
         reported_by:      currentUser?.name || 'Admin',
         source:           'manual'
-      })
+      }),
+      headers: { 'Prefer': 'return=representation' }
     });
+    console.log('Report insert result:', reportRes);
 
+    // Step 3: Close modal and reload fresh data
     closeModal();
     await loadStations();
 
-    // Re-show updated panel
+    // Step 4: Re-show the updated panel
     const updated = allStations.find(s => s.id === activeStationId);
     if (updated) showPanel(updated);
 
+    // Step 5: Show brief success message
+    const banner = document.createElement('div');
+    banner.textContent = '✅ Station updated successfully!';
+    banner.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);background:#1D9E75;color:white;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.2);';
+    document.body.appendChild(banner);
+    setTimeout(() => banner.remove(), 3000);
+
   } catch (err) {
-    alert('Error saving update: ' + err.message);
+    console.error('Full error:', err);
+    alert('Error saving update:\n' + err.message + '\n\nCheck that RLS is disabled in Supabase for all tables.');
   } finally {
     btn.textContent = 'Save Update';
     btn.disabled = false;
