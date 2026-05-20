@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pasig City Pumping Station Monitor</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- LOGIN SCREEN -->
+  <div id="login-screen">
+    <div class="login-box">
+      <div class="login-header">
+        <div class="login-logo">PS</div>
+        <h1>Pasig City<br/>Pumping Station Monitor</h1>
+        <p>Pasig City Engineering Office – Flood Control Division</p>
+      </div>
+      <div id="login-error" class="login-error hidden">Incorrect email or password.</div>
+      <input type="email" id="login-email" placeholder="Email address" autocomplete="email" />
+      <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" />
+      <button id="login-btn" onclick="handleLogin()">Sign In</button>
+      <div class="login-divider">or</div>
+      <button class="btn-public" onclick="enterPublicView()">Continue as Public Visitor</button>
+    </div>
+  </div>
+
+  <!-- MAIN DASHBOARD -->
+  <div id="dashboard" class="hidden">
+
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="topbar-logo">PS</div>
+        <div>
+          <div class="topbar-title">Pumping Station Monitor</div>
+          <div class="topbar-sub">Pasig City Engineering Office</div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div id="view-badge" class="badge-admin">
+          <span id="view-badge-icon">🔒</span>
+          <span id="view-badge-label">Admin View</span>
+        </div>
+        <div class="topbar-updated">Updated: <span id="last-updated">—</span></div>
+        <button id="refresh-btn" onclick="loadStations()" title="Refresh data">↻ Refresh</button>
+        <button id="logout-btn" onclick="handleLogout()">Sign Out</button>
+      </div>
+    </div>
+
+    <div class="summary-bar">
+      <div class="stat-card">
+        <div class="stat-label">Total Stations</div>
+        <div class="stat-value" id="stat-total">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Operational</div>
+        <div class="stat-value green" id="stat-operational">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Under Maintenance</div>
+        <div class="stat-value amber" id="stat-maintenance">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Non-Operational</div>
+        <div class="stat-value red" id="stat-nonop">—</div>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div class="map-wrapper">
+        <div id="map"></div>
+        <div class="map-legend">
+          <span><span class="dot green"></span>Operational</span>
+          <span><span class="dot amber"></span>Maintenance</span>
+          <span><span class="dot red"></span>Non-operational</span>
+          <span><span class="dot blue"></span>Coverage area</span>
+        </div>
+      </div>
+
+      <div class="side-panel">
+        <div class="panel-header">Station Info</div>
+        <div id="panel-content" class="panel-empty">
+          <div class="empty-icon">📍</div>
+          <p>Hover or click a station<br/>to see its details</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMIN ONLY: Status Update Modal -->
+    <div id="update-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <span id="modal-title">Update Station Status</span>
+          <button onclick="closeModal()" class="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <label>Status</label>
+          <select id="modal-status">
+            <option value="operational">Operational</option>
+            <option value="maintenance">Under Maintenance</option>
+            <option value="non-operational">Non-Operational</option>
+          </select>
+          <label>Current Water Level</label>
+          <input type="text" id="modal-water" placeholder="e.g. 0.8 m" />
+          <label>Pump Runtime</label>
+          <input type="text" id="modal-runtime" placeholder="e.g. 14 hrs today" />
+          <label>Last Maintenance Date</label>
+          <input type="text" id="modal-maintenance" placeholder="e.g. May 10, 2025" />
+          <label>Operational Notes</label>
+          <textarea id="modal-notes" placeholder="Any remarks or observations..."></textarea>
+          <label>Photo URL (optional)</label>
+          <input type="text" id="modal-photo" placeholder="https://..." />
+        </div>
+        <div class="modal-footer">
+          <button onclick="closeModal()" class="btn-cancel">Cancel</button>
+          <button onclick="submitUpdate()" class="btn-save">Save Update</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
