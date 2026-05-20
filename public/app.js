@@ -77,8 +77,12 @@ function enterDashboard() {
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('dashboard').classList.remove('hidden');
   updateViewBadge();
-  initMap();
-  loadStations();
+  // Small delay lets the browser fully render the map div
+  // before Leaflet tries to calculate its size
+  setTimeout(function() {
+    initMap();
+    loadStations();
+  }, 100);
 }
 
 function updateViewBadge() {
@@ -136,8 +140,9 @@ async function loadStations() {
 
 // ── Render stations on map ─────────────────────────────────────
 function renderStations(stations) {
-  polygonLayers.forEach(function(l) { map.removeLayer(l); });
-  markerLayers.forEach(function(l) { map.removeLayer(l); });
+  if (!map) { console.warn("Map not ready"); return; }
+  polygonLayers.forEach(function(l) { if (l) map.removeLayer(l); });
+  markerLayers.forEach(function(l) { if (l) map.removeLayer(l); });
   polygonLayers = [];
   markerLayers = [];
 
