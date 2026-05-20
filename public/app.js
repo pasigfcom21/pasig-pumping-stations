@@ -108,7 +108,7 @@ function loadAndRender() {
   document.getElementById('last-updated').textContent = 'Loading…';
 
   var stationsPromise = dbFetch('stations?select=*&order=id');
-  var reportsPromise  = dbFetch('status_reports?select=*&order=created_at.desc');
+  var reportsPromise  = dbFetch('status_reports?select=*&order=id.desc');
   var opsPromise      = dbFetch('operators?select=*');
 
   Promise.all([stationsPromise, reportsPromise, opsPromise])
@@ -118,13 +118,14 @@ function loadAndRender() {
       var operators = results[2];
 
       allStations = stations.map(function(s) {
+        // Use == not === to handle string/number type mismatches from DB
         var latestReport = null;
         for (var i = 0; i < reports.length; i++) {
-          if (reports[i].station_id === s.id) { latestReport = reports[i]; break; }
+          if (String(reports[i].station_id) === String(s.id)) { latestReport = reports[i]; break; }
         }
         var operator = null;
         for (var j = 0; j < operators.length; j++) {
-          if (operators[j].station_id === s.id) { operator = operators[j]; break; }
+          if (String(operators[j].station_id) === String(s.id)) { operator = operators[j]; break; }
         }
         s.latestReport = latestReport || {};
         s.operator     = operator     || {};
@@ -371,7 +372,7 @@ function loadAndRenderThen(callback) {
 
   Promise.all([
     dbFetch('stations?select=*&order=id'),
-    dbFetch('status_reports?select=*&order=created_at.desc'),
+    dbFetch('status_reports?select=*&order=id.desc'),
     dbFetch('operators?select=*')
   ]).then(function(results) {
     var stations  = results[0];
@@ -381,11 +382,11 @@ function loadAndRenderThen(callback) {
     allStations = stations.map(function(s) {
       var latestReport = null;
       for (var i = 0; i < reports.length; i++) {
-        if (reports[i].station_id === s.id) { latestReport = reports[i]; break; }
+        if (String(reports[i].station_id) === String(s.id)) { latestReport = reports[i]; break; }
       }
       var operator = null;
       for (var j = 0; j < operators.length; j++) {
-        if (operators[j].station_id === s.id) { operator = operators[j]; break; }
+        if (String(operators[j].station_id) === String(s.id)) { operator = operators[j]; break; }
       }
       s.latestReport = latestReport || {};
       s.operator     = operator     || {};
