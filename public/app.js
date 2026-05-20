@@ -1,17 +1,16 @@
 // ── State ──────────────────────────────────────────────────────
-let currentView = 'public';
-let currentUser = null;
-let map = null;
-let polygonLayers = [];
-let markerLayers = [];
-let activeStationId = null;
-let allStations = [];
+var currentView = 'public';
+var currentUser = null;
+var leafletMap = null;
+var polygonLayers = [];
+var markerLayers = [];
+var activeStationId = null;
+var allStations = [];
 
-// ── Supabase helpers ───────────────────────────────────────────
-async function supabaseFetch(path, method, body) {
-  const url = SUPABASE_URL + '/rest/v1/' + path;
-
-  const fetchOptions = {
+// ── Supabase fetch ─────────────────────────────────────────────
+function dbFetch(path, method, body) {
+  var url = SUPABASE_URL + '/rest/v1/' + path;
+  var opts = {
     method: method || 'GET',
     headers: {
       'apikey': SUPABASE_ANON_KEY,
@@ -20,235 +19,258 @@ async function supabaseFetch(path, method, body) {
       'Prefer': 'return=representation'
     }
   };
-
-  if (body) {
-    fetchOptions.body = JSON.stringify(body);
-  }
-
-  const res = await fetch(url, fetchOptions);
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(errText);
-  }
-
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(url, opts).then(function(res) {
+    return res.text().then(function(text) {
+      if (!res.ok) throw new Error(text);
+      return text ? JSON.parse(text) : [];
+    });
+  });
 }
 
-// ── Login / Logout ─────────────────────────────────────────────
+// ── Login ──────────────────────────────────────────────────────
 function handleLogin() {
-  const email    = document.getElementById('login-email').value.trim().toLowerCase();
-  const password = document.getElementById('login-password').value;
-  const errBox   = document.getElementById('login-error');
+  var email    = document.getElementById('login-email').value.trim().toLowerCase();
+  var password = document.getElementById('login-password').value;
+  var errBox   = document.getElementById('login-error');
+  var found    = null;
 
-  const account = ADMIN_ACCOUNTS.find(function(a) {
-    return a.email === email && a.password === password;
-  });
-
-  if (!account) {
-    errBox.classList.remove('hidden');
-    return;
+  for (var i = 0; i < ADMIN_ACCOUNTS.length; i++) {
+    if (ADMIN_ACCOUNTS[i].email === email && ADMIN_ACCOUNTS[i].password === password) {
+      found = ADMIN_ACCOUNTS[i];
+      break;
+    }
   }
 
+  if (!found) { errBox.classList.remove('hidden'); return; }
   errBox.classList.add('hidden');
-  currentUser = account;
+  currentUser = found;
   currentView = 'admin';
-  enterDashboard();
+  showDashboard();
 }
 
 function enterPublicView() {
   currentUser = null;
   currentView = 'public';
-  enterDashboard();
+  showDashboard();
 }
 
 function handleLogout() {
   currentUser = null;
   currentView = 'public';
+  if (leafletMap) { leafletMap.remove(); leafletMap = null; }
   document.getElementById('dashboard').classList.add('hidden');
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('login-email').value = '';
   document.getElementById('login-password').value = '';
-  if (map) { map.remove(); map = null; }
 }
 
-function enterDashboard() {
+function showDashboard() {
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('dashboard').classList.remove('hidden');
-  updateViewBadge();
-  // Small delay lets the browser fully render the map div
-  // before Leaflet tries to calculate its size
-  setTimeout(function() {
-    initMap();
-    loadStations();
-  }, 100);
-}
 
-function updateViewBadge() {
-  const badge = document.getElementById('view-badge');
-  const icon  = document.getElementById('view-badge-icon');
-  const label = document.getElementById('view-badge-label');
+  // Update badge
+  var badge = document.getElementById('view-badge');
+  var icon  = document.getElementById('view-badge-icon');
+  var label = document.getElementById('view-badge-label');
+  var logoutBtn = document.getElementById('logout-btn');
+
   if (currentView === 'admin') {
     badge.className = 'badge-admin';
     icon.textContent  = '🔒';
     label.textContent = 'Admin View';
-    document.getElementById('logout-btn').style.display = '';
+    logoutBtn.style.display = '';
   } else {
     badge.className = 'badge-public';
     icon.textContent  = '🌐';
     label.textContent = 'Public View';
-    document.getElementById('logout-btn').style.display = 'none';
+    logoutBtn.style.display = 'none';
   }
+
+  // Init map after a short delay so the div is visible and sized
+  setTimeout(function() {
+    if (!leafletMap) {
+      leafletMap = L.map('map', { zoomControl: true });
+      leafletMap.setView([14.5600, 121.0748], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap',
+        maxZoom: 19
+      }).addTo(leafletMap);
+      // Force map to recalculate size
+      leafletMap.invalidateSize();
+    }
+    loadAndRender();
+  }, 300);
 }
 
-// ── Map ────────────────────────────────────────────────────────
-function initMap() {
-  if (map) return;
-  map = L.map('map', { zoomControl: true }).setView([14.5600, 121.0748], 14);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors',
-    maxZoom: 19
-  }).addTo(map);
-}
-
-// ── Load stations from Supabase ────────────────────────────────
-async function loadStations() {
+// ── Load data ──────────────────────────────────────────────────
+function loadAndRender() {
   document.getElementById('last-updated').textContent = 'Loading…';
-  try {
-    const stations  = await supabaseFetch('stations?select=*&order=id');
-    const reports   = await supabaseFetch('status_reports?select=*&order=created_at.desc');
-    const operators = await supabaseFetch('operators?select=*');
 
-    allStations = stations.map(function(s) {
-      const latestReport = reports.find(function(r) { return r.station_id === s.id; }) || {};
-      const operator     = operators.find(function(o) { return o.station_id === s.id; }) || {};
-      return Object.assign({}, s, { latestReport: latestReport, operator: operator });
+  var stationsPromise = dbFetch('stations?select=*&order=id');
+  var reportsPromise  = dbFetch('status_reports?select=*&order=created_at.desc');
+  var opsPromise      = dbFetch('operators?select=*');
+
+  Promise.all([stationsPromise, reportsPromise, opsPromise])
+    .then(function(results) {
+      var stations  = results[0];
+      var reports   = results[1];
+      var operators = results[2];
+
+      allStations = stations.map(function(s) {
+        var latestReport = null;
+        for (var i = 0; i < reports.length; i++) {
+          if (reports[i].station_id === s.id) { latestReport = reports[i]; break; }
+        }
+        var operator = null;
+        for (var j = 0; j < operators.length; j++) {
+          if (operators[j].station_id === s.id) { operator = operators[j]; break; }
+        }
+        s.latestReport = latestReport || {};
+        s.operator     = operator     || {};
+        return s;
+      });
+
+      drawStations();
+      updateCounts();
+
+      document.getElementById('last-updated').textContent =
+        new Date().toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' });
+    })
+    .catch(function(err) {
+      console.error('Load error:', err);
+      document.getElementById('last-updated').textContent = 'Load failed';
+      alert('Could not load data.\n\n' + err.message);
     });
-
-    renderStations(allStations);
-    updateSummary(allStations);
-    document.getElementById('last-updated').textContent =
-      new Date().toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' });
-
-  } catch (err) {
-    console.error('Load error:', err);
-    document.getElementById('last-updated').textContent = 'Error loading';
-    alert('Could not load data: ' + err.message);
-  }
 }
 
-// ── Render stations on map ─────────────────────────────────────
-function renderStations(stations) {
-  if (!map) { console.warn("Map not ready"); return; }
-  polygonLayers.forEach(function(l) { if (l) map.removeLayer(l); });
-  markerLayers.forEach(function(l) { if (l) map.removeLayer(l); });
+// shortcut for refresh button
+function loadStations() { loadAndRender(); }
+
+// ── Draw markers & polygons ────────────────────────────────────
+function drawStations() {
+  // Remove old layers
+  for (var i = 0; i < polygonLayers.length; i++) {
+    if (polygonLayers[i]) leafletMap.removeLayer(polygonLayers[i]);
+  }
+  for (var j = 0; j < markerLayers.length; j++) {
+    if (markerLayers[j]) leafletMap.removeLayer(markerLayers[j]);
+  }
   polygonLayers = [];
-  markerLayers = [];
+  markerLayers  = [];
 
-  var statusColor = {
-    'operational': '#1D9E75',
-    'maintenance': '#EF9F27',
-    'non-operational': '#E24B4A'
-  };
+  var colors = { 'operational':'#1D9E75', 'maintenance':'#EF9F27', 'non-operational':'#E24B4A' };
 
-  stations.forEach(function(s) {
-    var color = statusColor[s.status] || '#378ADD';
+  allStations.forEach(function(s) {
+    var color = colors[s.status] || '#378ADD';
 
+    // Polygon
+    var poly = null;
     if (s.coverage_geojson) {
       try {
-        var gj = JSON.parse(s.coverage_geojson);
+        var gj     = JSON.parse(s.coverage_geojson);
         var coords = gj.features[0].geometry.coordinates[0];
         var latlngs = coords.map(function(c) { return [c[1], c[0]]; });
-        var poly = L.polygon(latlngs, {
+        poly = L.polygon(latlngs, {
           color: '#378ADD', fillColor: '#378ADD',
           fillOpacity: 0.15, weight: 1.5, dashArray: '4,4'
-        }).addTo(map);
-        poly.on('mouseover', function() { showPanel(s); });
-        poly.on('click', function() { showPanel(s); });
-        polygonLayers.push(poly);
-      } catch(e) { polygonLayers.push(null); }
-    } else {
-      polygonLayers.push(null);
+        }).addTo(leafletMap);
+        (function(station) {
+          poly.on('mouseover', function() { showPanel(station); });
+          poly.on('click',     function() { showPanel(station); });
+        })(s);
+      } catch(e) { poly = null; }
     }
+    polygonLayers.push(poly);
 
-    var iconHtml = '<div style="width:28px;height:28px;border-radius:50%;background:' + color + ';border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center;color:white;font-size:11px;font-weight:600;cursor:pointer;">' + s.id.toString().padStart(2,'0') + '</div>';
+    // Marker
+    var num  = s.id.toString().padStart(2, '0');
+    var html = '<div style="width:28px;height:28px;border-radius:50%;background:' + color +
+               ';border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.25);display:flex;' +
+               'align-items:center;justify-content:center;color:white;font-size:11px;' +
+               'font-weight:600;cursor:pointer;">' + num + '</div>';
+    var icon   = L.divIcon({ className: '', html: html, iconSize: [28,28], iconAnchor: [14,14] });
+    var marker = L.marker([s.lat, s.lng], { icon: icon }).addTo(leafletMap);
 
-    var icon = L.divIcon({ className: '', html: iconHtml, iconSize: [28,28], iconAnchor: [14,14] });
-    var marker = L.marker([s.lat, s.lng], { icon: icon }).addTo(map);
-    marker.on('mouseover', function() { showPanel(s); });
-    marker.on('click', function() { showPanel(s); });
+    (function(station) {
+      marker.on('mouseover', function() { showPanel(station); });
+      marker.on('click',     function() { showPanel(station); });
+    })(s);
     markerLayers.push(marker);
   });
 }
 
-// ── Update summary counts ──────────────────────────────────────
-function updateSummary(stations) {
+// ── Summary counts ─────────────────────────────────────────────
+function updateCounts() {
+  var op = 0, mt = 0, no = 0;
+  allStations.forEach(function(s) {
+    if (s.status === 'operational')    op++;
+    if (s.status === 'maintenance')    mt++;
+    if (s.status === 'non-operational') no++;
+  });
   document.getElementById('stat-total').textContent       = 32;
-  document.getElementById('stat-operational').textContent = stations.filter(function(s) { return s.status === 'operational'; }).length;
-  document.getElementById('stat-maintenance').textContent = stations.filter(function(s) { return s.status === 'maintenance'; }).length;
-  document.getElementById('stat-nonop').textContent       = stations.filter(function(s) { return s.status === 'non-operational'; }).length;
+  document.getElementById('stat-operational').textContent = op;
+  document.getElementById('stat-maintenance').textContent = mt;
+  document.getElementById('stat-nonop').textContent       = no;
 }
 
 // ── Side panel ─────────────────────────────────────────────────
 function showPanel(s) {
   activeStationId = s.id;
 
-  polygonLayers.forEach(function(l) {
-    if (l) l.setStyle({ fillOpacity:0.15, weight:1.5, color:'#378ADD' });
-  });
-  var idx = allStations.findIndex(function(st) { return st.id === s.id; });
-  if (polygonLayers[idx]) {
+  // Reset all polygons then highlight the selected one
+  for (var i = 0; i < polygonLayers.length; i++) {
+    if (polygonLayers[i]) polygonLayers[i].setStyle({ fillOpacity:0.15, weight:1.5, color:'#378ADD' });
+  }
+  var idx = allStations.indexOf(s);
+  if (idx >= 0 && polygonLayers[idx]) {
     polygonLayers[idx].setStyle({ fillOpacity:0.35, weight:2.5, color:'#185FA5' });
   }
 
   var r = s.latestReport || {};
   var o = s.operator     || {};
 
-  var statusLabel = {
-    'operational': 'Operational',
-    'maintenance': 'Under Maintenance',
-    'non-operational': 'Non-Operational'
-  };
-  var statusColor = {
-    'operational': '#1D9E75',
-    'maintenance': '#EF9F27',
-    'non-operational': '#E24B4A'
-  };
-
-  var color = statusColor[s.status] || '#378ADD';
-  var label = statusLabel[s.status] || s.status;
+  var statusColors = { 'operational':'#1D9E75','maintenance':'#EF9F27','non-operational':'#E24B4A' };
+  var statusLabels = { 'operational':'Operational','maintenance':'Under Maintenance','non-operational':'Non-Operational' };
+  var color = statusColors[s.status] || '#378ADD';
+  var label = statusLabels[s.status] || s.status;
+  var num   = s.id.toString().padStart(2,'0');
 
   var html = '';
 
-  if (currentView === 'admin' && (s.photo_url || r.photo_url)) {
-    var photo = r.photo_url || s.photo_url;
-    html += '<img src="' + photo + '" class="panel-photo" alt="Station photo" onerror="this.style.display=\'none\'" />';
+  // Photo (admin only)
+  if (currentView === 'admin' && (r.photo_url || s.photo_url)) {
+    html += '<img src="' + (r.photo_url || s.photo_url) + '" class="panel-photo" alt="Photo" onerror="this.style.display=\'none\'">';
   }
 
+  // Header
   html += '<div class="panel-station-header">';
-  html += '<div class="station-circle" style="background:' + color + '">' + s.id.toString().padStart(2,'0') + '</div>';
-  html += '<div><div class="station-name">' + s.name + '</div><div class="station-loc">' + s.location + '</div></div>';
-  html += '</div>';
-  html += '<div><span class="status-badge ' + s.status + '">● ' + label + '</span></div>';
+  html += '<div class="station-circle" style="background:' + color + '">' + num + '</div>';
+  html += '<div><div class="station-name">' + s.name + '</div>';
+  html += '<div class="station-loc">' + s.location + '</div></div></div>';
+  html += '<span class="status-badge ' + s.status + '">● ' + label + '</span>';
 
   if (currentView === 'admin') {
     html += '<div style="border-top:1px solid #e2e8f0;padding-top:12px;">';
-    html += '<div class="info-row" style="margin-bottom:8px;"><div class="info-row-label">Pump Operator</div><div class="info-row-value" style="font-weight:600;">' + (o.name || '—') + '</div></div>';
-    html += '<div class="info-row" style="margin-bottom:12px;"><div class="info-row-label">Contact</div><div class="info-row-value">📞 ' + (o.contact || '—') + '</div></div>';
+    html += '<div class="info-row" style="margin-bottom:8px;">';
+    html += '<div class="info-row-label">Pump Operator</div>';
+    html += '<div class="info-row-value" style="font-weight:600;">' + (o.name || '—') + '</div></div>';
+    html += '<div class="info-row" style="margin-bottom:12px;">';
+    html += '<div class="info-row-label">Contact</div>';
+    html += '<div class="info-row-value">📞 ' + (o.contact || '—') + '</div></div>';
     html += '<div class="info-grid">';
     html += '<div class="info-tile"><div class="info-tile-label">Pumps</div><div class="info-tile-value">' + (s.pumps || '—') + '</div></div>';
     html += '<div class="info-tile"><div class="info-tile-label">Capacity</div><div class="info-tile-value" style="font-size:13px;">' + (s.capacity || '—') + '</div></div>';
     html += '<div class="info-tile"><div class="info-tile-label">💧 Water Level</div><div class="info-tile-value">' + (r.water_level || '—') + '</div></div>';
     html += '<div class="info-tile"><div class="info-tile-label">⏱ Runtime</div><div class="info-tile-value" style="font-size:12px;">' + (r.runtime_hours || '—') + '</div></div>';
     html += '</div>';
-    html += '<div class="info-row" style="margin-top:10px;"><div class="info-row-label">🔧 Last Maintenance</div><div class="info-row-value">' + (r.last_maintenance || '—') + '</div></div>';
-    html += '</div>';
-
+    html += '<div class="info-row" style="margin-top:10px;">';
+    html += '<div class="info-row-label">🔧 Last Maintenance</div>';
+    html += '<div class="info-row-value">' + (r.last_maintenance || '—') + '</div></div></div>';
     if (r.notes) {
-      html += '<div><div class="info-row-label" style="margin-bottom:5px;">📋 Operational Notes</div><div class="notes-box">' + r.notes + '</div></div>';
+      html += '<div><div class="info-row-label" style="margin-bottom:5px;">📋 Operational Notes</div>';
+      html += '<div class="notes-box">' + r.notes + '</div></div>';
     }
-
     html += '<button class="btn-edit" onclick="openModal(' + s.id + ')">✏️ Update Station Status</button>';
 
   } else {
@@ -257,28 +279,32 @@ function showPanel(s) {
     html += '<div class="info-tile"><div class="info-tile-label">Pumps</div><div class="info-tile-value">' + (s.pumps || '—') + '</div></div>';
     html += '<div class="info-tile"><div class="info-tile-label">Capacity</div><div class="info-tile-value" style="font-size:12px;">' + (s.capacity || '—') + '</div></div>';
     html += '</div>';
-    html += '<div style="margin-top:10px;"><div class="info-row-label" style="margin-bottom:5px;">📋 Latest Status Report</div><div class="report-box">' + (r.notes || 'No report available yet.') + '</div></div>';
-    html += '<div style="margin-top:10px;"><div class="info-row-label" style="margin-bottom:4px;">🗺 Coverage Area</div><div class="info-row-value" style="font-size:12px;color:#64748b;">Highlighted in blue on the map.</div></div>';
-    html += '</div>';
+    html += '<div style="margin-top:10px;"><div class="info-row-label" style="margin-bottom:5px;">📋 Latest Status Report</div>';
+    html += '<div class="report-box">' + (r.notes || 'No report available yet.') + '</div></div>';
+    html += '<div style="margin-top:10px;"><div class="info-row-label" style="margin-bottom:4px;">🗺 Coverage Area</div>';
+    html += '<div class="info-row-value" style="font-size:12px;color:#64748b;">Highlighted in blue on the map.</div></div></div>';
   }
 
   document.getElementById('panel-content').className = 'panel-body';
   document.getElementById('panel-content').innerHTML = html;
 }
 
-// ── Status Update Modal ────────────────────────────────────────
+// ── Modal ──────────────────────────────────────────────────────
 function openModal(stationId) {
   activeStationId = stationId;
-  var s = allStations.find(function(st) { return st.id === stationId; });
+  var s = null;
+  for (var i = 0; i < allStations.length; i++) {
+    if (allStations[i].id === stationId) { s = allStations[i]; break; }
+  }
   var r = (s && s.latestReport) ? s.latestReport : {};
 
-  document.getElementById('modal-title').textContent     = 'Update: ' + (s ? s.name : 'Station');
-  document.getElementById('modal-status').value          = s ? s.status : 'operational';
-  document.getElementById('modal-water').value           = r.water_level || '';
-  document.getElementById('modal-runtime').value         = r.runtime_hours || '';
-  document.getElementById('modal-maintenance').value     = r.last_maintenance || '';
-  document.getElementById('modal-notes').value           = r.notes || '';
-  document.getElementById('modal-photo').value           = r.photo_url || '';
+  document.getElementById('modal-title').textContent      = 'Update: ' + (s ? s.name : 'Station');
+  document.getElementById('modal-status').value           = s ? s.status : 'operational';
+  document.getElementById('modal-water').value            = r.water_level      || '';
+  document.getElementById('modal-runtime').value          = r.runtime_hours    || '';
+  document.getElementById('modal-maintenance').value      = r.last_maintenance || '';
+  document.getElementById('modal-notes').value            = r.notes            || '';
+  document.getElementById('modal-photo').value            = r.photo_url        || '';
   document.getElementById('update-modal').classList.remove('hidden');
 }
 
@@ -286,73 +312,108 @@ function closeModal() {
   document.getElementById('update-modal').classList.add('hidden');
 }
 
-async function submitUpdate() {
-  var btn = document.querySelector('.btn-save');
+function submitUpdate() {
+  var btn    = document.querySelector('.btn-save');
+  var status = document.getElementById('modal-status').value;
+  var water  = document.getElementById('modal-water').value;
+  var runtime= document.getElementById('modal-runtime').value;
+  var maint  = document.getElementById('modal-maintenance').value;
+  var notes  = document.getElementById('modal-notes').value;
+  var photo  = document.getElementById('modal-photo').value;
+  var sid    = activeStationId;
+
   btn.textContent = 'Saving…';
   btn.disabled = true;
 
-  try {
-    var status      = document.getElementById('modal-status').value;
-    var water_level = document.getElementById('modal-water').value;
-    var runtime     = document.getElementById('modal-runtime').value;
-    var maintenance = document.getElementById('modal-maintenance').value;
-    var notes       = document.getElementById('modal-notes').value;
-    var photo_url   = document.getElementById('modal-photo').value;
-
-    // Step 1: Update station status
-    await supabaseFetch(
-      'stations?id=eq.' + activeStationId,
-      'PATCH',
-      { status: status }
-    );
-
-    // Step 2: Insert new status report
-    await supabaseFetch(
-      'status_reports',
-      'POST',
-      {
-        station_id:       activeStationId,
-        water_level:      water_level,
+  // Step 1: update station status
+  dbFetch('stations?id=eq.' + sid, 'PATCH', { status: status })
+    .then(function() {
+      // Step 2: insert status report
+      return dbFetch('status_reports', 'POST', {
+        station_id:       sid,
+        water_level:      water,
         runtime_hours:    runtime,
-        last_maintenance: maintenance,
+        last_maintenance: maint,
         notes:            notes,
-        photo_url:        photo_url,
+        photo_url:        photo,
         reported_by:      currentUser ? currentUser.name : 'Admin',
         source:           'manual'
+      });
+    })
+    .then(function() {
+      closeModal();
+      btn.textContent = 'Save Update';
+      btn.disabled = false;
+
+      // Reload data then refresh panel
+      loadAndRenderThen(function() {
+        for (var i = 0; i < allStations.length; i++) {
+          if (allStations[i].id === sid) { showPanel(allStations[i]); break; }
+        }
+        var banner = document.createElement('div');
+        banner.textContent = '✅ Station updated successfully!';
+        banner.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);background:#1D9E75;color:white;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.2);';
+        document.body.appendChild(banner);
+        setTimeout(function() { banner.remove(); }, 3000);
+      });
+    })
+    .catch(function(err) {
+      console.error('Save error:', err);
+      btn.textContent = 'Save Update';
+      btn.disabled = false;
+      alert('Error saving:\n' + err.message);
+    });
+}
+
+// Load and render, then run a callback when done
+function loadAndRenderThen(callback) {
+  document.getElementById('last-updated').textContent = 'Loading…';
+
+  Promise.all([
+    dbFetch('stations?select=*&order=id'),
+    dbFetch('status_reports?select=*&order=created_at.desc'),
+    dbFetch('operators?select=*')
+  ]).then(function(results) {
+    var stations  = results[0];
+    var reports   = results[1];
+    var operators = results[2];
+
+    allStations = stations.map(function(s) {
+      var latestReport = null;
+      for (var i = 0; i < reports.length; i++) {
+        if (reports[i].station_id === s.id) { latestReport = reports[i]; break; }
       }
-    );
+      var operator = null;
+      for (var j = 0; j < operators.length; j++) {
+        if (operators[j].station_id === s.id) { operator = operators[j]; break; }
+      }
+      s.latestReport = latestReport || {};
+      s.operator     = operator     || {};
+      return s;
+    });
 
-    closeModal();
-    await loadStations();
+    drawStations();
+    updateCounts();
+    document.getElementById('last-updated').textContent =
+      new Date().toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' });
 
-    var updated = allStations.find(function(s) { return s.id === activeStationId; });
-    if (updated) showPanel(updated);
-
-    var banner = document.createElement('div');
-    banner.textContent = '✅ Station updated successfully!';
-    banner.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);background:#1D9E75;color:white;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.2);';
-    document.body.appendChild(banner);
-    setTimeout(function() { banner.remove(); }, 3000);
-
-  } catch (err) {
-    console.error('Save error:', err);
-    alert('Error saving update:\n' + err.message);
-  } finally {
-    btn.textContent = 'Save Update';
-    btn.disabled = false;
-  }
+    if (callback) callback();
+  }).catch(function(err) {
+    console.error('Reload error:', err);
+    document.getElementById('last-updated').textContent = 'Load failed';
+  });
 }
 
 // ── Enter key on login ─────────────────────────────────────────
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !document.getElementById('login-screen').classList.contains('hidden')) {
-    handleLogin();
+  if (e.key === 'Enter') {
+    var loginScreen = document.getElementById('login-screen');
+    if (!loginScreen.classList.contains('hidden')) handleLogin();
   }
 });
 
 // ── Auto-refresh every 5 minutes ──────────────────────────────
 setInterval(function() {
-  if (!document.getElementById('dashboard').classList.contains('hidden')) {
-    loadStations();
-  }
-}, 5 * 60 * 1000);
+  var dash = document.getElementById('dashboard');
+  if (dash && !dash.classList.contains('hidden')) loadAndRender();
+}, 300000);
